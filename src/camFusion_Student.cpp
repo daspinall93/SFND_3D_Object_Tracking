@@ -2,6 +2,7 @@
 #include <iostream>
 #include <algorithm>
 #include <numeric>
+#include <unordered_map>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
@@ -10,6 +11,19 @@
 
 using namespace std;
 
+template<typename T>
+T mean(vector<T> vec)
+{
+    return (T)accumulate(vec.begin(), vec.end(), 0) / (T)vec.size();
+}
+
+template<typename T>
+T standardDev(vector<T> vec)
+{
+    T mean = (T)accumulate(vec.begin(), vec.end(), 0) / (T)vec.size();
+    T sqSum = (T)inner_product(vec.begin(), vec.end(), vec.begin(), 0.0);
+    return sqrt(sqSum / vec.size() - mean * mean);
+}
 
 // Create groups of Lidar points whose projection into the camera falls into the same bounding box
 void clusterLidarWithROI(std::vector<BoundingBox> &boundingBoxes, std::vector<LidarPoint> &lidarPoints, float shrinkFactor, cv::Mat &P_rect_xx, cv::Mat &R_rect_xx, cv::Mat &RT)
@@ -136,28 +150,129 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
 
 
 // associate a given bounding box with the keypoints it contains
-void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPoint> &kptsCurr, std::vector<cv::DMatch> &kptMatches)
+void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::unordered_map<int, int>& keyPointBoxes, std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPoint> &kptsCurr, std::vector<cv::DMatch> &kptMatches)
 {
-    // ...
-}
+    // Calculate euclidean distance mean
+    std::vector<double> distances(kptMatches.size());
+    std::transform(kptMatches.begin(), kptMatches.end(), distances, [](const cv::DMatch& match){ return match.distance;});
+    double meanDist = mean(distances);
 
+    // Cycle through keypoints, filtering out those with euclidean distance (between prev and current) too far above the mean
+    double maxDistDiff = 1.0;
+    for (const cv::DMatch& match : kptMatches)
+    {
+        const cv::KeyPoint& currentKeyPoint = kptsCurr.at(match.trainIdx);
+        if (abs(match.distance - meanDist) < maxDistDiff && boundingBox.roi.contains(currentKeyPoint.pt))
+        {
+            boundingBox.keypoints.push_back(currentKeyPoint);
+            keyPointBoxes[match.trainIdx] = boundingBox.boxID;
+        }
+    }
+}
 
 // Compute time-to-collision (TTC) based on keypoint correspondences in successive images
 void computeTTCCamera(std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPoint> &kptsCurr, 
                       std::vector<cv::DMatch> kptMatches, double frameRate, double &TTC, cv::Mat *visImg)
 {
-    // ...
-}
+    // Loop over keypoints, calculate distance ratios 
+    std::vector<double> distRatios;
+    for (auto it1 = kptMatches.begin(); it1 != kptMatches.end() - 1; ++it1)
+    {
+        cv::KeyPoint kpOuterCurr = kptsCurr.at(it1->trainIdx);
+        cv::KeyPoint kpOuterPrev = kptsPrev.at(it1->queryIdx);
 
+        for (auto it2 = kptMatches.begin() + 1; it2 != kptMatches.end(); ++it2)
+        {            
+            cv::KeyPoint kpInnerCurr = kptsCurr.at(it2->trainIdx);
+            cv::KeyPoint kpInnerPrev = kptsPrev.at(it2->queryIdx);
+
+            // Calculate distances and their ratios
+            double distCurr = cv::norm(kpOuterCurr.pt - kpInnerCurr.pt);
+            double distPrev = cv::norm(kpOuterPrev.pt - kpInnerPrev.pt);
+
+            double minDist = 100.0;
+            if (distPrev > std::numeric_limits<double>::epsilon() && distCurr >= minDist)
+            {
+                double distRatio = distCurr / distPrev;
+                distRatios.push_back(distRatio);
+            }
+        }
+    }
+
+    // only continue if list of distance ratios is not empty
+    if (distRatios.size() == 0)
+    {
+        TTC = std::numeric_limits<double>::quiet_NaN();
+        return;
+    }
+
+    // Calculate median distance ratio
+    std::sort(distRatios.begin(), distRatios.end());
+    long medIndex = floor(distRatios.size() / 2.0);
+    double medDistRatio = distRatios.size() % 2 == 0 ? (distRatios[medIndex - 1] + distRatios[medIndex]) / 2.0 : distRatios[medIndex];
+
+    double dt = 1 / frameRate;
+    TTC = -dt / (1 - medDistRatio);
+}
 
 void computeTTCLidar(std::vector<LidarPoint> &lidarPointsPrev,
                      std::vector<LidarPoint> &lidarPointsCurr, double frameRate, double &TTC)
 {
-    // ...
+    // Calculate average distances
+    std::vector<double> prevDistances(lidarPointsPrev.size());
+    std::transform(lidarPointsPrev.begin(), lidarPointsPrev.end(), prevDistances.begin(),
+    [](const LidarPoint& lidarPoint)
+    {
+        return lidarPoint.x;
+    });
+
+    std::vector<double> currDistances(lidarPointsCurr.size());
+    std::transform(lidarPointsCurr.begin(), lidarPointsCurr.end(), prevDistances.begin(),
+    [](const LidarPoint& lidarPoint)
+    {
+        return lidarPoint.x;
+    });
+
+    double prevDistance = mean(prevDistances);
+    double currDistance = mean(currDistances);
+
+    // Calculate TTC
+    double dt = 1 / frameRate;
+
+    TTC = (currDistance * dt) / (prevDistance - currDistance);
 }
 
 
 void matchBoundingBoxes(std::vector<cv::DMatch> &matches, std::map<int, int> &bbBestMatches, DataFrame &prevFrame, DataFrame &currFrame)
 {
-    // ...
+    // Create a map of boxes to previous boxes and the number of points in that box
+    std::map<int, std::map<int, int>> currPrevBoxMatchesCount; // curBoxId, prevBoxId, count
+    for (const cv::DMatch& match : matches)
+    {
+        // Check if keypoint in previous frame had a bounding box association
+        if (prevFrame.keyPointBoxes.find(match.queryIdx) == prevFrame.keyPointBoxes.end())
+            continue;
+
+        int currFrameBoxId = currFrame.keyPointBoxes.at(match.trainIdx);
+        int prevFrameBoxID = prevFrame.keyPointBoxes.at(match.trainIdx);
+
+        std::map<int, int>& prevCountMap = currPrevBoxMatchesCount[currFrameBoxId];
+        if (prevCountMap.find(prevFrameBoxID) == prevCountMap.end())
+            prevCountMap[prevFrameBoxID] = 1;
+        else
+            prevCountMap.at(prevFrameBoxID)++;
+    }
+
+    // Loop through each current box id and calculate the prev box id with the highest match count
+    for (auto& currPrevBoxMatchCount : currPrevBoxMatchesCount)
+    {
+        std::map<int, int>::iterator bestMatch = std::max_element(currPrevBoxMatchCount.second.begin(), currPrevBoxMatchCount.second.end(), 
+        [](const std::pair<int, int>& p1, const std::pair<int, int>& p2)
+        {
+            return p1.second < p2.second;
+        });
+        
+        bbBestMatches[currPrevBoxMatchCount.first] = bestMatch->first;
+    }
+
 }
