@@ -154,7 +154,7 @@ void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::unordered_map<int, 
 {
     // Calculate euclidean distance mean
     std::vector<double> distances(kptMatches.size());
-    std::transform(kptMatches.begin(), kptMatches.end(), distances, [](const cv::DMatch& match){ return match.distance;});
+    std::transform(kptMatches.begin(), kptMatches.end(), distances.begin(), [](const cv::DMatch& match){ return match.distance;});
     double meanDist = mean(distances);
 
     // Cycle through keypoints, filtering out those with euclidean distance (between prev and current) too far above the mean

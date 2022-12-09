@@ -22,8 +22,42 @@
 
 using namespace std;
 
-/* MAIN PROGRAM */
+struct Log
+{
+    Log(string filePath) : logFilePath(filePath) 
+    {
+        std::ofstream file(logFilePath, std::fstream::trunc);
+        file << "i,CameraTTC,LidarTTC" << endl;
+    }
+
+    void log(int i, double cameraTTC, double lidarTTC)
+    {
+        std::ofstream file(logFilePath, std::fstream::app);
+        file << i << "," << cameraTTC << "," << lidarTTC << endl;
+    }
+
+private:
+    string logFilePath;
+};
+
+void run(DetectorType detectorType, DescriptorType descriptorType);
+
 int main(int argc, const char *argv[])
+{
+    for (int detector = (int)DetectorType::Shitomasi; detector != (int)DetectorType::Sift; detector++)
+    {
+        for (int descriptor = (int)DescriptorType::Brief; descriptor != (int)DescriptorType::Sift; descriptor++)
+        {
+            cout << "Descriptor = " << DescriptorStrings.at((DescriptorType) descriptor) << ", Detector = " << DetectorStrings.at((DetectorType) detector) << endl;
+            run((DetectorType) detector, (DescriptorType) descriptor);
+        }
+    }
+
+    return 0;
+}
+
+/* MAIN PROGRAM */
+void run(DetectorType detectorType, DescriptorType descriptorType)
 {
     /* INIT VARIABLES AND DATA STRUCTURES */
 
@@ -76,6 +110,7 @@ int main(int argc, const char *argv[])
 
     /* MAIN LOOP OVER ALL IMAGES */
 
+    Log log(DetectorStrings.at(detectorType) + "_" + DescriptorStrings.at(descriptorType));
     for (size_t imgIndex = 0; imgIndex <= imgEndIndex - imgStartIndex; imgIndex+=imgStepWidth)
     {
         /* LOAD IMAGE INTO BUFFER */
@@ -274,12 +309,12 @@ int main(int argc, const char *argv[])
                     }
                     bVis = false;
 
+                    log.log(imgIndex, ttcCamera, ttcLidar);
+
                 } // eof TTC computation
             } // eof loop over all BB matches            
 
         }
 
     } // eof loop over all images
-
-    return 0;
 }
