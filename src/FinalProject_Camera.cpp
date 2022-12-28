@@ -21,6 +21,7 @@
 #include "objectDetection2D.hpp"
 #include "lidarData.hpp"
 #include "camFusion.hpp"
+#include "RingBuffer.h"
 
 using namespace std;
 
@@ -86,7 +87,7 @@ int main(int argc, const char *argv[])
         DescriptorType::Brief,
         DescriptorType::Orb,
         DescriptorType::Freak,
-        // DescriptorType::Akaze, // throws exception
+        DescriptorType::Akaze,
         DescriptorType::Sift
     };  
 
@@ -95,6 +96,11 @@ int main(int argc, const char *argv[])
     {
         for (DescriptorType descriptor : descriptors)
         {
+            // Check for invalid combinations
+            if ((detector == DetectorType::Sift && descriptor == DescriptorType::Orb) ||
+                (descriptor == DescriptorType::Akaze && detector != DetectorType::Akaze))
+                continue;
+
             cout << "Descriptor = " << DescriptorStrings.at((DescriptorType) descriptor) << ", Detector = " << DetectorStrings.at((DetectorType) detector) << endl;
             run(detector, descriptor, log);
         }
@@ -106,6 +112,8 @@ int main(int argc, const char *argv[])
 /* MAIN PROGRAM */
 void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
 {
+
+
     /* INIT VARIABLES AND DATA STRUCTURES */
 
     // data location
@@ -152,7 +160,7 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
     // misc
     double sensorFrameRate = 10.0 / imgStepWidth; // frames per second for Lidar and camera
     int dataBufferSize = 2;       // no. of images which are held in memory (ring buffer) at the same time
-    vector<DataFrame> dataBuffer; // list of data frames which are held in memory at the same time
+    RingBuffer<DataFrame> dataBuffer(dataBufferSize); // list of data frames which are held in memory at the same time
     bool vis3DObjects = false;
     bool visYOLOObjectDetection = false;
     bool visImageObjectDetection = false;
@@ -173,9 +181,9 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
         cv::Mat img = cv::imread(imgFullFilename);
 
         // push image into data frame buffer
-        DataFrame frame;
-        frame.cameraImg = img;
-        dataBuffer.push_back(frame);
+        dataBuffer.insert();
+        DataFrame& currentFrame = dataBuffer.current();
+        currentFrame.cameraImg = img;
 
         cout << "#1 : LOAD IMAGE INTO BUFFER done" << endl;
 
@@ -184,7 +192,7 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
 
         float confThreshold = 0.2;
         float nmsThreshold = 0.4;        
-        detectObjects((dataBuffer.end() - 1)->cameraImg, (dataBuffer.end() - 1)->boundingBoxes, confThreshold, nmsThreshold,
+        detectObjects(dataBuffer.current().cameraImg, dataBuffer.current().boundingBoxes, confThreshold, nmsThreshold,
                       yoloBasePath, yoloClassesFile, yoloModelConfiguration, yoloModelWeights, visYOLOObjectDetection);
 
         cout << "#2 : DETECT & CLASSIFY OBJECTS done" << endl;
@@ -201,7 +209,7 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
         float minZ = -1.5, maxZ = -0.9, minX = 2.0, maxX = 20.0, maxY = 2.0, minR = 0.1; // focus on ego lane
         cropLidarPoints(lidarPoints, minX, maxX, maxY, minZ, maxZ, minR);
     
-        (dataBuffer.end() - 1)->lidarPoints = lidarPoints;
+        dataBuffer.current().lidarPoints = lidarPoints;
 
         cout << "#3 : CROP LIDAR POINTS done" << endl;
 
@@ -210,13 +218,13 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
 
         // associate Lidar points with camera-based ROI
         float shrinkFactor = 0.10; // shrinks each bounding box by the given percentage to avoid 3D object merging at the edges of an ROI
-        clusterLidarWithROI((dataBuffer.end()-1)->boundingBoxes, (dataBuffer.end() - 1)->lidarPoints, shrinkFactor, P_rect_00, R_rect_00, RT);
-        auto boxIDWithLidarPoints = find_if((dataBuffer.end()-1)->boundingBoxes.begin(), (dataBuffer.end()-1)->boundingBoxes.end(), [](const BoundingBox& box){return box.lidarPoints.size() > 0;});
+        clusterLidarWithROI(dataBuffer.current().boundingBoxes, dataBuffer.current().lidarPoints, shrinkFactor, P_rect_00, R_rect_00, RT);
+        auto boxIDWithLidarPoints = find_if(dataBuffer.current().boundingBoxes.begin(), dataBuffer.current().boundingBoxes.end(), [](const BoundingBox& box){return box.lidarPoints.size() > 0;});
 
         // Visualize 3D objects
         if(vis3DObjects)
         {
-            show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), true);
+            show3DObjects(dataBuffer.current().boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), true);
         }
 
         cout << "#4 : CLUSTER LIDAR POINT CLOUD done" << endl;
@@ -229,7 +237,7 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
 
         // convert current image to grayscale
         cv::Mat imgGray;
-        cv::cvtColor((dataBuffer.end()-1)->cameraImg, imgGray, cv::COLOR_BGR2GRAY);
+        cv::cvtColor(dataBuffer.current().cameraImg, imgGray, cv::COLOR_BGR2GRAY);
 
         // extract 2D keypoints from current image
         vector<cv::KeyPoint> keypoints; // create empty feature list for current image
@@ -247,17 +255,17 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
         }
 
         // push keypoints and descriptor for current frame to end of data buffer
-        (dataBuffer.end() - 1)->keypoints = keypoints;
+        dataBuffer.current().keypoints = keypoints;
 
         cout << "#5 : DETECT KEYPOINTS done" << endl;
 
         /* EXTRACT KEYPOINT DESCRIPTORS */
 
         cv::Mat descriptors;
-        descKeypoints((dataBuffer.end() - 1)->keypoints, (dataBuffer.end() - 1)->cameraImg, descriptors, descriptorType);
+        descKeypoints(dataBuffer.current().keypoints, dataBuffer.current().cameraImg, descriptors, descriptorType);
 
         // push descriptors for current frame to end of data buffer
-        (dataBuffer.end() - 1)->descriptors = descriptors;
+        dataBuffer.current().descriptors = descriptors;
 
         cout << "#6 : EXTRACT DESCRIPTORS done" << endl;
 
@@ -272,12 +280,12 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
             DescriptorClass descriptorClass = descriptorType == DescriptorType::Sift ? DescriptorClass::HOG : DescriptorClass::Binary;
             SelectorType selectorType = SelectorType::KNN;
 
-            matchDescriptors((dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints,
-                             (dataBuffer.end() - 2)->descriptors, (dataBuffer.end() - 1)->descriptors,
+            matchDescriptors(dataBuffer.prev().keypoints, dataBuffer.current().keypoints,
+                             dataBuffer.prev().descriptors, dataBuffer.current().descriptors,
                              matches, descriptorClass, matcherType, selectorType);
 
             // store matches in current data frame
-            (dataBuffer.end() - 1)->kptMatches = matches;
+            dataBuffer.current().kptMatches = matches;
 
             cout << "#7 : MATCH KEYPOINT DESCRIPTORS done" << endl;
             
@@ -286,11 +294,11 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
             //// STUDENT ASSIGNMENT
             //// TASK FP.1 -> match list of 3D objects (vector<BoundingBox>) between current and previous frame (implement ->matchBoundingBoxes)
             map<int, int> bbBestMatches;
-            matchBoundingBoxes(matches, bbBestMatches, *(dataBuffer.end()-2), *(dataBuffer.end()-1)); // associate bounding boxes between current and previous frame using keypoint matches
+            matchBoundingBoxes(matches, bbBestMatches, dataBuffer.prev(), dataBuffer.current()); // associate bounding boxes between current and previous frame using keypoint matches
             //// EOF STUDENT ASSIGNMENT
 
             // store matches in current data frame
-            (dataBuffer.end()-1)->bbMatches = bbBestMatches;
+            dataBuffer.current().bbMatches = bbBestMatches;
 
             cout << "#8 : TRACK 3D OBJECT BOUNDING BOXES done" << endl;
 
@@ -300,11 +308,11 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
             // loop over all BB match pairs
             vector<double> ttcLidarVec, ttcCameraVec, lidarDistanceVec;
             int numBoxesWithLidarPoints = 0;
-            for (auto it1 = (dataBuffer.end() - 1)->bbMatches.begin(); it1 != (dataBuffer.end() - 1)->bbMatches.end(); ++it1)
+            for (auto it1 = dataBuffer.current().bbMatches.begin(); it1 != dataBuffer.current().bbMatches.end(); ++it1)
             {
                 // find bounding boxes associates with current match
                 BoundingBox *prevBB, *currBB;
-                for (auto it2 = (dataBuffer.end() - 1)->boundingBoxes.begin(); it2 != (dataBuffer.end() - 1)->boundingBoxes.end(); ++it2)
+                for (auto it2 = dataBuffer.current().boundingBoxes.begin(); it2 != dataBuffer.current().boundingBoxes.end(); ++it2)
                 {
                     if (it1->second == it2->boxID) // check wether current match partner corresponds to this BB
                     {
@@ -312,7 +320,7 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
                     }
                 }
 
-                for (auto it2 = (dataBuffer.end() - 2)->boundingBoxes.begin(); it2 != (dataBuffer.end() - 2)->boundingBoxes.end(); ++it2)
+                for (auto it2 = dataBuffer.prev().boundingBoxes.begin(); it2 != dataBuffer.prev().boundingBoxes.end(); ++it2)
                 {
                     if (it1->first == it2->boxID) // check wether current match partner corresponds to this BB
                     {
@@ -339,15 +347,15 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
                     //// TASK FP.3 -> assign enclosed keypoint matches to bounding box (implement -> clusterKptMatchesWithROI)
                     // Update current data frame keyPointBoxes
                     //// TASK FP.4 -> compute time-to-collision based on camera (implement -> computeTTCCamera)
-                    clusterKptMatchesWithROI(*currBB, (dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints, (dataBuffer.end() - 1)->kptMatches);
-                    double ttcCamera = computeTTCCamera((dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints, currBB->kptMatches, sensorFrameRate);
+                    clusterKptMatchesWithROI(*currBB, dataBuffer.prev().keypoints, dataBuffer.current().keypoints, dataBuffer.current().kptMatches);
+                    double ttcCamera = computeTTCCamera(dataBuffer.prev().keypoints, dataBuffer.current().keypoints, currBB->kptMatches, sensorFrameRate);
                     if (!isnan(ttcCamera))
                         ttcCameraVec.push_back(ttcCamera);
                     //// EOF STUDENT ASSIGNMENT
 
                     if (visLidar)
                     {
-                        cv::Mat visImg = (dataBuffer.end() - 1)->cameraImg.clone();
+                        cv::Mat visImg = dataBuffer.current().cameraImg.clone();
                         showLidarImgOverlay(visImg, currBB->lidarPoints, P_rect_00, R_rect_00, RT, &visImg);
                         cv::rectangle(visImg, cv::Point(currBB->roi.x, currBB->roi.y), cv::Point(currBB->roi.x + currBB->roi.width, currBB->roi.y + currBB->roi.height), cv::Scalar(0, 255, 0), 2);
                         
@@ -370,7 +378,7 @@ void run(DetectorType detectorType, DescriptorType descriptorType, Log& log)
             double ttcCamera = ttcCameraVec.empty() ? numeric_limits<double>::quiet_NaN() : *min_element(ttcCameraVec.begin(), ttcCameraVec.end());
             double ttcLidar = ttcLidarVec.empty() ? numeric_limits<double>::quiet_NaN() : *min_element(ttcLidarVec.begin(), ttcLidarVec.end());
             double lidarDistance = lidarDistanceVec.empty() ? numeric_limits<double>::quiet_NaN() : *min_element(lidarDistanceVec.begin(), lidarDistanceVec.end());
-            log.log(imgIndex, (dataBuffer.end() - 1)->bbMatches.size(), detectorType, descriptorType, ttcCamera, ttcLidar, lidarDistance);
+            log.log(imgIndex, dataBuffer.current().bbMatches.size(), detectorType, descriptorType, ttcCamera, ttcLidar, lidarDistance);
         }
 
     } // eof loop over all images

@@ -167,7 +167,7 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
 // associate a given bounding box with the keypoints it contains
 void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPoint> &kptsCurr, std::vector<cv::DMatch> &kptMatches)
 {
-    // Determine distance between keypoints
+    // Determine keypoints within bounding box
     unordered_set<int> containedKeyPointIdxs;
     for (int i = 0; i < kptMatches.size(); i++)
     {
@@ -183,8 +183,7 @@ void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::vector<cv::KeyPoint
     for (int i : containedKeyPointIdxs)
         keyPointDistances.push_back(kptMatches.at(i).distance);
 
-
-    // Determine which keypoints are within the bounding box
+    // Remove outlier keypoints
     unordered_set<int> selectedMatches;
     selectedMatches.reserve(containedKeyPointIdxs.size());
     double medianMatchDistance = median(keyPointDistances);

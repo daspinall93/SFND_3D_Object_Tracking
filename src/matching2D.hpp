@@ -52,7 +52,7 @@ const std::unordered_map<DescriptorType, std::string> DescriptorStrings {
     { DescriptorType::Brief, "Brief" },
     { DescriptorType::Orb, "Orb" },
     { DescriptorType::Freak, "Freak" },
-    // { DescriptorType::Akaze, "Akaze" },
+    { DescriptorType::Akaze, "Akaze" },
     { DescriptorType::Sift, "Sift" }
 };
 enum class MatcherType

@@ -80,6 +80,7 @@ double descKeypoints(vector<cv::KeyPoint> &keypoints, cv::Mat &img, cv::Mat &des
             int nBytes = 32;
             bool orientation = false;
             extractor = cv::xfeatures2d::BriefDescriptorExtractor::create(nBytes, orientation);
+            break;
         }
         
         case DescriptorType::Orb:
