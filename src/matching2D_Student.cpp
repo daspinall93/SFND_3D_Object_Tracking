@@ -5,7 +5,7 @@ using namespace std;
 
 // Find best matches for keypoints in two camera images based on several matching methods
 void matchDescriptors(std::vector<cv::KeyPoint> &kPtsSource, std::vector<cv::KeyPoint> &kPtsRef, cv::Mat &descSource, cv::Mat &descRef,
-                      std::vector<cv::DMatch> &matches, DescriptorClass descriptorType, MatcherType matcherType, SelectorType selectorType)
+                      std::vector<cv::DMatch> &matches, DescriptorClass descriptorClass, MatcherType matcherType, SelectorType selectorType)
 {
     // configure matcher
     bool crossCheck = false;
@@ -14,14 +14,22 @@ void matchDescriptors(std::vector<cv::KeyPoint> &kPtsSource, std::vector<cv::Key
     {
     case MatcherType::BF:
     {
-        int normType = cv::NORM_HAMMING;
+        cv::NormTypes normType = descriptorClass == DescriptorClass::HOG ? cv::NORM_L2 : cv::NORM_HAMMING;
         matcher = cv::BFMatcher::create(normType, crossCheck);
         break;
     }
     
     case MatcherType::FLANN:
+    {
+        if (descSource.type() != CV_32F)
+        { // Bug
+            descSource.convertTo(descSource, CV_32F);
+            descRef.convertTo(descRef, CV_32F);
+        }
+
         matcher = cv::FlannBasedMatcher::create();
         break;
+    }
     }
 
     switch(selectorType)
@@ -57,7 +65,7 @@ double descKeypoints(vector<cv::KeyPoint> &keypoints, cv::Mat &img, cv::Mat &des
     cv::Ptr<cv::DescriptorExtractor> extractor;
     switch(descriptorType)
     {
-        case DescriptorType::Brief:
+        case DescriptorType::Brisk:
         {
             int threshold = 30;        // FAST/AGAST detection threshold score.
             int octaves = 3;           // detection octaves (use 0 to do single scale)
@@ -66,22 +74,87 @@ double descKeypoints(vector<cv::KeyPoint> &keypoints, cv::Mat &img, cv::Mat &des
             extractor = cv::BRISK::create(threshold, octaves, patternScale);
             break;
         }
+
+        case DescriptorType::Brief:
+        {
+            int nBytes = 32;
+            bool orientation = false;
+            extractor = cv::xfeatures2d::BriefDescriptorExtractor::create(nBytes, orientation);
+        }
         
         case DescriptorType::Orb:
-            extractor = cv::ORB::create();
-            break;
+        {
+            int nfeatures = 500;
+            float scaleFactor = 1.2f;
+            int nlevels = 8;
+            int edgeThreshold = 31;
+            int firstLevel = 0;
+            int WTA_K = 2;
+            auto scoreType = cv::ORB::HARRIS_SCORE;
+            int patchSize = 31;
+            int fastThreshold = 20;
 
+            extractor = cv::ORB::create(
+                nfeatures, scaleFactor,
+                nlevels, edgeThreshold,
+                firstLevel, WTA_K,
+                scoreType, patchSize, 
+                fastThreshold);
+            break;
+        }
         case DescriptorType::Freak:
-            extractor = cv::xfeatures2d::FREAK::create();
+        {
+            bool orientationNormalized = true;
+            bool scaleNormalized = true;
+            float patternScale = 22.0f;
+            int nOctaves = 4;
+
+            extractor = cv::xfeatures2d::FREAK::create(
+                orientationNormalized,
+                scaleNormalized,
+                patternScale,
+                nOctaves);
             break;
 
-        // case DescriptorType::Akaze: // Throwing exception
-        //     extractor = cv::AKAZE::create();
-        //     break;
+        }
+
+        case DescriptorType::Akaze: // Throwing exception
+        {
+            auto descriptor_type = cv::AKAZE::DESCRIPTOR_MLDB;
+            int descriptor_size = 0;
+            int descriptor_channels = 3;
+            float threshold = 0.001f;
+            int nOctaves = 4;
+            int nOctaveLayers = 4;
+            auto diffusivity = cv::KAZE::DIFF_PM_G2;
+
+            extractor = cv::AKAZE::create(
+                descriptor_type,
+                descriptor_size,
+                descriptor_channels,
+                threshold,
+                nOctaves,
+                nOctaveLayers,
+                diffusivity);
+            break;
+        }
 
         case DescriptorType::Sift:
-            extractor = cv::SIFT::create();
+        {
+            int nfeatures = 0;
+            int nOctaveLayers = 3;
+            double contrastThreshold = 0.04;
+            double edgeThreshold = 10;
+            double sigma = 1.6;
+
+            extractor = cv::SIFT::create(
+                nfeatures,
+                nOctaveLayers,
+                contrastThreshold,
+                edgeThreshold,
+                sigma);
             break;
+        }
     }
 
     // perform feature description

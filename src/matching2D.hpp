@@ -40,13 +40,15 @@ const std::unordered_map<DetectorType, std::string> DetectorStrings {
 };
 enum class DescriptorType
 {
+    Brisk,
     Brief,
     Orb,
     Freak,
-    // Akaze,
+    Akaze,
     Sift
 };
 const std::unordered_map<DescriptorType, std::string> DescriptorStrings {
+    { DescriptorType::Brisk, "Brisk" },
     { DescriptorType::Brief, "Brief" },
     { DescriptorType::Orb, "Orb" },
     { DescriptorType::Freak, "Freak" },
@@ -77,6 +79,6 @@ void detKeypointsShiTomasi(std::vector<cv::KeyPoint> &keyPoints, cv::Mat &img, b
 double detKeypointsModern(std::vector<cv::KeyPoint> &keyPoints, cv::Mat &img, DetectorType detectorType, bool bVis=false);
 double descKeypoints(std::vector<cv::KeyPoint> &keyPoints, cv::Mat &img, cv::Mat &descriptors, DescriptorType descriptorType);
 void matchDescriptors(std::vector<cv::KeyPoint> &kPtsSource, std::vector<cv::KeyPoint> &kPtsRef, cv::Mat &descSource, cv::Mat &descRef,
-                      std::vector<cv::DMatch> &matches, DescriptorClass descriptorType, MatcherType matcherType, SelectorType selectorType);
+                      std::vector<cv::DMatch> &matches, DescriptorClass descriptorClass, MatcherType matcherType, SelectorType selectorType);
 
 #endif /* matching2D_hpp */
